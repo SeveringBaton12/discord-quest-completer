@@ -2918,6 +2918,11 @@
             return true;
         });
 
+        // Quests the picker had a chance to show. Anything Discord pushes in after that point is
+        // "new" and, with auto-enroll on, gets picked up on a later cycle instead of being frozen
+        // out by the one-time selection (the "live list" the picker otherwise can't see).
+        const seenAtPicker = new Set(quests.map(q => q.id));
+
         if (allQuests.length - quests.length > 0) {
             const parts = [];
             if (excluded.completed) parts.push(`${excluded.completed} completed`);
@@ -2989,14 +2994,17 @@
 
                 quests = getQuests();
 
-                // Filter out completed, expired, blacklisted, skipped, AND unselected quests
-                const active = quests.filter(q =>
-                    pickerResult.selectedQuests.has(q.id)
-                    && !q.userStatus?.completedAt
-                    && notExpired(q)
-                    && q.id !== CONST.ID
-                    && !Tasks.skipped.has(q.id)
-                );
+                // Filter out completed, expired, blacklisted, skipped, AND unselected quests.
+                // A quest that appeared after the picker is allowed in when auto-enroll is on.
+                const active = quests.filter(q => {
+                    const selected = pickerResult.selectedQuests.has(q.id);
+                    const isNew = !seenAtPicker.has(q.id);
+                    return (selected || (isNew && RUNTIME.autoEnroll))
+                        && !q.userStatus?.completedAt
+                        && notExpired(q)
+                        && q.id !== CONST.ID
+                        && !Tasks.skipped.has(q.id);
+                });
 
                 if (!active.length) {
                     // Saying "all completed" here is how a quest this client skipped, or one that
