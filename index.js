@@ -5,11 +5,12 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.11.5",
+        VERSION: "v4.11.6",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
         ERR: "#f04747",
+        LANG: "auto",                   // UI language: "auto" (follow Discord) | "en" | "ru"
         HIDE_ACTIVITY: false,           // hide "Playing ..." while quests run (turns Discord's own
                                         // showCurrentGame off for the duration, restores it after)
         PLAY_SESSION_TAIL_MIN: 2,       // minutes to keep a finished game quest's fake process
@@ -19,6 +20,10 @@
                                         // the quest requirement. Costs no extra requests: Discord
                                         // ends the quest heartbeat itself on completion, so this
                                         // only extends the "Playing ..." presence.
+        AUTO_START: false,              // skip the quest picker and run every eligible quest on paste
+        GAME_CONCURRENCY: 1,            // how many game/stream tasks run in parallel
+        VIDEO_CONCURRENCY: 2,           // how many video tasks run in parallel
+        SOUND_VOLUME: 0.5,              // completion/stop sound volume, 0..1
         MAX_LOG_ITEMS: 60               // UI log limit
     };
 
@@ -42,6 +47,208 @@
         randomDelay: false              // whether to inject randomized 1-30min idle gaps between quests (anti-detection)
     };
 
+    /* ── i18n ──────────────────────────────────────────────────────
+       The dashboard, quest picker and the common log lines read their text
+       from here. Set CONFIG.LANG to "en", "ru", or "auto" (follows Discord's
+       locale). Missing keys fall back to English, so a partial translation
+       never breaks the UI. Only user-facing text is localized; internal debug
+       lines stay in English.
+    ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── */
+    const LOCALES = {
+        en: {
+            // consent
+            "consent.title": "Authorize application?",
+            "consent.intro": "To complete this achievement quest, Orion needs to OAuth-authorize this app on your Discord account:",
+            "consent.scopes": "Scopes requested:",
+            "consent.warning": "The app's backend receives a real authorization code. Orion revokes the grant immediately after the quest is marked complete. Discord enforcement against quest automation can affect the whole account.",
+            "consent.remember": "Don't ask again for this app this session",
+            "consent.cancel": "Cancel",
+            "consent.authorize": "Authorize",
+            // picker
+            "picker.filter.reward": "Filter By Reward",
+            "picker.filter.type": "Filter By Type",
+            "picker.options": "Options",
+            "picker.opt.autoEnroll": "Auto-enroll in quests",
+            "picker.opt.autoClaim": "Auto-claim rewards",
+            "picker.opt.playSound": "Sound on completion",
+            "picker.opt.randomDelay": "Random 1-30min delay between cycles",
+            "picker.selectAll": "SELECT ALL",
+            "picker.deselectAll": "DESELECT ALL",
+            "picker.start": "START",
+            "picker.noQuests": "No quests available",
+            "picker.reward.1": "IN-GAME",
+            "picker.reward.3": "AVATAR DECORATION",
+            "picker.reward.4": "ORBS",
+            "picker.reward.other": "OTHER",
+            "picker.unknownReward": "Unknown Reward",
+            "picker.unknownQuest": "Unknown Quest",
+            "picker.orbTotal": "{0} Orbs selected",
+            "picker.balance": "{0} Orbs on the account",
+            "picker.showing": "Showing {0} of {1} quests",
+            // dashboard
+            "dash.waiting": "Waiting for tasks...",
+            "dash.status.completed": "COMPLETED",
+            "dash.status.claimed": "CLAIMED",
+            "dash.status.running": "RUNNING",
+            "dash.status.pending": "PENDING",
+            "dash.progress": "Progress",
+            "dash.inQueue": "In Queue",
+            "dash.aborted": "Aborted",
+            "dash.claimReward": "CLAIM REWARD",
+            "dash.waitingClaim": "WAITING...",
+            "dash.actionRequired": "ACTION REQUIRED",
+            "dash.status.queued": "QUEUE",
+            "dash.status.failed": "FAILED",
+            "dash.goto": "GO TO QUESTS",
+            "dash.acceptQuest": "Accept quest in Discord",
+            "dash.completeManually": "Complete manually",
+            "dash.stop": "STOP",
+            "dash.stopTitle": "Stop script",
+            "dash.hideBtn": "HIDE",
+            "dash.init": "Initializing System...",
+            "dash.claimedBtn": "CLAIMED!",
+            "dash.hide": "Hide (Shift+.)",
+            "dash.show": "Show (Shift+.)",
+            // log lines
+            "log.waitingQuests": "Waiting for Discord to send its quest list...",
+            "log.allCompleted": "All available quests are completed!",
+            "log.noActiveQuests": "No active quests are available.",
+            "log.noQuestsList": "Discord has not given this client a quest list. Reload Discord (Ctrl+R) and paste again.",
+            "log.noSelected": "No quests selected. Shutting down.",
+            "log.modulesFail": "Failed to load Discord modules. Aborting.",
+            "log.cycleStart": "Starting loop #{0}...",
+            "log.cycleProcess": "Processing: {0} videos, {1} games.",
+            "log.enroll": "Accepting quest: {0}",
+            "log.taskStarted": "Started {0}: {1}",
+            "log.taskCompleted": "Completed \"{0}\"!",
+            "log.claimSuccess": "Reward for \"{0}\" claimed successfully!",
+            "log.claimCaptcha": "Action required for \"{0}\". Check Discord UI for captcha.",
+            "log.suspended": "Discord has suspended quest access on this account {0}. Its own client refuses to start a quest in this state, so Orion stops too.",
+            "log.blocked": "Discord has blocked quest enrollment on this account until {0}. Stopping instead of retrying.",
+            "log.excludedCount": "{0} quests hidden",
+            "log.excluded": "Quest \"{0}\" excluded: {1}"
+        },
+        ru: {
+            // consent
+            "consent.title": "Авторизовать приложение?",
+            "consent.intro": "Чтобы выполнить этот квест-достижение, Orion нужно авторизовать это приложение через OAuth на вашем аккаунте Discord:",
+            "consent.scopes": "Запрашиваемые права:",
+            "consent.warning": "Бэкенд приложения получает настоящий код авторизации. Orion отзывает разрешение сразу после того, как квест отмечен выполненным. Discord преследует автоматизацию квестов, это может затронуть весь аккаунт.",
+            "consent.remember": "Не спрашивать снова для этого приложения в этой сессии",
+            "consent.cancel": "Отмена",
+            "consent.authorize": "Авторизовать",
+            // picker
+            "picker.filter.reward": "Фильтр по награде",
+            "picker.filter.type": "Фильтр по типу",
+            "picker.options": "Настройки",
+            "picker.opt.autoEnroll": "Автозапись в квесты",
+            "picker.opt.autoClaim": "Автополучение наград",
+            "picker.opt.playSound": "Звук по завершении",
+            "picker.opt.randomDelay": "Случайная пауза 1-30 мин между циклами",
+            "picker.selectAll": "ВЫБРАТЬ ВСЕ",
+            "picker.deselectAll": "СНЯТЬ ВСЕ",
+            "picker.start": "СТАРТ",
+            "picker.noQuests": "Нет доступных квестов",
+            "picker.reward.1": "В ИГРЕ",
+            "picker.reward.3": "АВАТАР",
+            "picker.reward.4": "ОРБЫ",
+            "picker.reward.other": "ДРУГОЕ",
+            "picker.unknownReward": "Неизвестная награда",
+            "picker.unknownQuest": "Неизвестный квест",
+            "picker.orbTotal": "Выбрано: {0} орбов",
+            "picker.balance": "{0} орбов на аккаунте",
+            "picker.showing": "Показано квестов: {0} из {1}",
+            // dashboard
+            "dash.waiting": "Ожидание задач...",
+            "dash.status.completed": "ВЫПОЛНЕНО",
+            "dash.status.claimed": "ПОЛУЧЕНО",
+            "dash.status.running": "ВЫПОЛНЯЕТСЯ",
+            "dash.status.pending": "ОЖИДАЕТ",
+            "dash.progress": "Прогресс",
+            "dash.inQueue": "В очереди",
+            "dash.aborted": "Прервано",
+            "dash.claimReward": "ПОЛУЧИТЬ НАГРАДУ",
+            "dash.waitingClaim": "ОЖИДАНИЕ...",
+            "dash.actionRequired": "ТРЕБУЕТСЯ ДЕЙСТВИЕ",
+            "dash.status.queued": "ОЧЕРЕДЬ",
+            "dash.status.failed": "ОШИБКА",
+            "dash.goto": "К КВЕСТАМ",
+            "dash.acceptQuest": "Примите квест в Discord",
+            "dash.completeManually": "Завершите вручную",
+            "dash.stop": "СТОП",
+            "dash.stopTitle": "Остановить скрипт",
+            "dash.hideBtn": "СКРЫТЬ",
+            "dash.init": "Инициализация системы...",
+            "dash.claimedBtn": "ПОЛУЧЕНО!",
+            "dash.hide": "Скрыть (Shift+.)",
+            "dash.show": "Показать (Shift+.)",
+            // log lines
+            "log.waitingQuests": "Ждём, пока Discord пришлёт список квестов...",
+            "log.allCompleted": "Все доступные квесты выполнены!",
+            "log.noActiveQuests": "Нет доступных активных квестов.",
+            "log.noQuestsList": "Discord не выдал этому клиенту список квестов. Перезагрузите Discord (Ctrl+R) и вставьте заново.",
+            "log.noSelected": "Квесты не выбраны. Завершение.",
+            "log.modulesFail": "Не удалось загрузить модули Discord. Прерывание.",
+            "log.cycleStart": "Старт цикла #{0}...",
+            "log.cycleProcess": "Обработка: {0} видео, {1} игр.",
+            "log.enroll": "Принимаем квест: {0}",
+            "log.taskStarted": "Запущено {0}: {1}",
+            "log.taskCompleted": "Выполнено \"{0}\"!",
+            "log.claimSuccess": "Награда за \"{0}\" получена успешно!",
+            "log.claimCaptcha": "Требуется действие по \"{0}\". Проверьте капчу в интерфейсе Discord.",
+            "log.suspended": "Discord приостановил доступ к квестам на этом аккаунте {0}. Собственный клиент отказывается запускать квесты в этом состоянии, поэтому Orion тоже останавливается.",
+            "log.blocked": "Discord заблокировал запись в квесты на этом аккаунте до {0}. Останавливаемся вместо повторов.",
+            "log.excludedCount": "Скрыто квестов: {0}",
+            "log.excluded": "Квест \"{0}\" отсеян: {1}"
+        }
+    };
+
+    function detectLang() {
+        if (CONFIG.LANG !== 'auto') return CONFIG.LANG === 'ru' ? 'ru' : 'en';
+        try {
+            const nav = (navigator.language || '').toLowerCase();
+            if (nav.startsWith('ru')) return 'ru';
+            // Discord stores the chosen locale in localStorage; prefer it over the OS locale.
+            const raw = localStorage.getItem('locale');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                const v = (parsed && (parsed.value ?? parsed)) ?? '';
+                if (String(v).toLowerCase().startsWith('ru')) return 'ru';
+            }
+        } catch (_) { }
+        return 'en';
+    }
+
+    let LANG = detectLang();
+    // Cycle the UI language at runtime (RU <-> EN) and re-render the dashboard. The picker and
+    // already-emitted log lines keep their language; new logs and the task cards follow the new one.
+    const cycleLang = () => {
+        LANG = LANG === 'ru' ? 'en' : 'ru';
+        const btn = document.getElementById('orion-lang');
+        if (btn) btn.textContent = LANG === 'ru' ? 'RU' : 'EN';
+        Logger.render();
+    };
+    const tr = (key, ...args) => {
+        const dict = LOCALES[LANG] || LOCALES.en;
+        let s = dict[key] ?? LOCALES.en[key] ?? key;
+        for (let i = 0; i < args.length; i++) {
+            s = s.replace(new RegExp('\\{' + i + '\\}', 'g'), String(args[i] ?? ''));
+        }
+        return s;
+    };
+
+    // Internal task status -> localized dashboard label. Unknown values pass through unchanged,
+    // so a future Discord status string never throws.
+    const statusLabel = s => ({
+        RUNNING: tr("dash.status.running"),
+        QUEUE: tr("dash.status.queued"),
+        PENDING: tr("dash.status.pending"),
+        COMPLETED: tr("dash.status.completed"),
+        CLAIMED: tr("dash.status.claimed"),
+        FAILED: tr("dash.status.failed"),
+        ABORTED: tr("dash.status.failed")
+    })[s] ?? s;
+
     /* ── audio cue ───────────────────────────────────────────────── */
     const Sound = {
         _ctx: null,
@@ -64,12 +271,12 @@
                     o.frequency.setValueAtTime(523.25, t0);
                     o.frequency.setValueAtTime(659.25, t0 + 0.12);
                     o.frequency.setValueAtTime(783.99, t0 + 0.24);
-                    g.gain.setValueAtTime(0.55, t0);
+                    g.gain.setValueAtTime(0.55 * CONFIG.SOUND_VOLUME, t0);
                     g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.55);
                     o.start(t0); o.stop(t0 + 0.6);
                 } else {
                     o.frequency.value = 880; // A5
-                    g.gain.setValueAtTime(0.45, t0);
+                    g.gain.setValueAtTime(0.45 * CONFIG.SOUND_VOLUME, t0);
                     g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18);
                     o.start(t0); o.stop(t0 + 0.2);
                 }
@@ -96,19 +303,19 @@
                 ov.id = 'orion-consent';
                 ov.style.cssText = 'position:fixed;inset:0;z-index:1002;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);font-family:var(--font-primary);';
                 ov.innerHTML = `<div style="width:420px;max-width:92vw;background:var(--background-base-low);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);box-shadow:var(--shadow-button-overlay);color:var(--text-default);overflow:hidden;">
-                    <div style="padding:14px 16px;background:var(--background-mod-muted);border-bottom:1px solid var(--border-subtle);font-weight:700;color:var(--text-strong);">Authorize application?</div>
+                    <div style="padding:14px 16px;background:var(--background-mod-muted);border-bottom:1px solid var(--border-subtle);font-weight:700;color:var(--text-strong);">${tr('consent.title')}</div>
                     <div style="padding:16px;font-size:13px;line-height:1.5;">
-                        <div>To complete this achievement quest, Orion needs to OAuth-authorize this app on your Discord account:</div>
+                        <div>${tr('consent.intro')}</div>
                         <div id="oc-app" style="font-weight:700;color:var(--text-strong);margin:6px 0;"></div>
-                        <div style="color:var(--text-muted);">Scopes requested:</div>
+                        <div style="color:var(--text-muted);">${tr('consent.scopes')}</div>
                         <ul id="oc-scopes" style="margin:4px 0 10px;padding-left:18px;color:var(--text-muted);"></ul>
-                        <div style="color:var(--text-feedback-warning);">The app's backend receives a real authorization code. Orion revokes the grant immediately after the quest is marked complete. Discord enforcement against quest automation can affect the whole account.</div>
+                        <div style="color:var(--text-feedback-warning);">${tr('consent.warning')}</div>
                         <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:12px;color:var(--text-muted);">
-                            <input type="checkbox" id="oc-remember" class="native-cb"> Don't ask again for this app this session</label>
+                            <input type="checkbox" id="oc-remember" class="native-cb"> ${tr('consent.remember')}</label>
                     </div>
                     <div style="display:flex;gap:10px;padding:12px 16px;border-top:1px solid var(--border-subtle);">
-                        <button id="oc-no" class="quest-pick-btn deselect" style="flex:1;">Cancel</button>
-                        <button id="oc-yes" class="quest-pick-btn start" style="flex:1;">Authorize</button>
+                        <button id="oc-no" class="quest-pick-btn deselect" style="flex:1;">${tr('consent.cancel')}</button>
+                        <button id="oc-yes" class="quest-pick-btn start" style="flex:1;">${tr('consent.authorize')}</button>
                     </div></div>`;
                 document.body.appendChild(ov);
                 ov.querySelector('#oc-app').textContent = appName ? `${appName} (${appId})` : `App ${appId}`;
@@ -367,7 +574,7 @@
             else failed++;
         }
 
-        if (!blocked && !failed) return { finished, blocked, failed, line: 'All available quests are completed!', playDone: true };
+        if (!blocked && !failed) return { finished, blocked, failed, line: tr("log.allCompleted"), playDone: true };
 
         const parts = [];
         if (finished) parts.push(`${finished} quest(s) finished`);
@@ -594,12 +801,13 @@
                         <span style="opacity:0.6; font-size:10px; margin-left:4px; padding-top: 3px; font-weight:500;">${CONFIG.VERSION}</span>
                     </span>
                     <div id="orion-controls">
-                        <span class="ctrl-btn ctrl-stop" id="orion-stop" title="Stop script">${ICONS.STOP} STOP</span>
-                        <span class="ctrl-btn ctrl-hide" id="orion-close" title="Shift + .">HIDE</span>
-                        <span class="ctrl-btn ctrl-opts" id="orion-opts" title="Options">${ICONS.OPT}</span>
+                        <span class="ctrl-btn ctrl-stop" id="orion-stop" title="${tr("dash.stopTitle")}">${ICONS.STOP} ${tr("dash.stop")}</span>
+                        <span class="ctrl-btn ctrl-hide" id="orion-close" title="Shift + .">${tr("dash.hideBtn")}</span>
+                        <span class="ctrl-btn ctrl-lang" id="orion-lang" title="Language / Язык">${LANG === 'ru' ? 'RU' : 'EN'}</span>
+                        <span class="ctrl-btn ctrl-opts" id="orion-opts" title="${tr("picker.options")}">${ICONS.OPT}</span>
                     </div>
                 </div>
-                <div id="orion-body"><div style="text-align:center; padding:30px; color:var(--text-muted); font-size:12px; font-weight:500;">Initializing System...</div></div>
+                <div id="orion-body"><div style="text-align:center; padding:30px; color:var(--text-muted); font-size:12px; font-weight:500;">${tr("dash.init")}</div></div>
                 <div id="orion-logs"></div>
             `;
             document.body.appendChild(this.root);
@@ -656,7 +864,7 @@
                     const taskData = this.tasks.get(questId);
                     if (!taskData) return;
 
-                    btn.innerText = "WAITING...";
+                    btn.innerText = tr("dash.waitingClaim");
                     btn.disabled = true;
                     btn.style.opacity = "0.5";
 
@@ -667,8 +875,8 @@
                         const claimRes = await Tasks.claimReward(questId);
 
                         if (claimRes?.body?.claimed_at) {
-                            btn.innerText = "CLAIMED!";
-                            this.log(`[Claim] Reward for "${taskData.name}" claimed successfully!`, 'success');
+                            btn.innerText = tr("dash.claimedBtn");
+                            this.log(`[Claim] ${tr("log.claimSuccess", taskData.name)}`, 'success');
 
                             this.updateTask(questId, { ...taskData, status: "CLAIMED", claimable: false, claimState: null });
                             setTimeout(() => this.removeTask(questId), 2000);
@@ -680,7 +888,7 @@
                             this.updateTask(questId, { ...taskData, claimState: 'FAILED' });
                         }
                     } catch (err) {
-                        this.log(`[Claim] Action required for "${taskData.name}". Check Discord UI for captcha.`, 'warn');
+                        this.log(`[Claim] ${tr("log.claimCaptcha", taskData.name)}`, 'warn');
                         // formally update state to FAILED so render() locks it permanently
                         this.updateTask(questId, { ...taskData, claimState: 'FAILED' });
                     }
@@ -689,6 +897,7 @@
 
             document.getElementById('orion-close').onclick = () => this.toggle();
             document.getElementById('orion-stop').onclick = () => this.shutdown();
+            document.getElementById('orion-lang').onclick = () => cycleLang();
 
             // Keep the reference so shutdown() can detach it. An anonymous listener here
             // survived STOP and stacked one more copy per paste, each closing over a dead
@@ -845,7 +1054,7 @@
             if (document.getElementById('orion-picker-form')) return;
             const body = document.getElementById('orion-body');
             if (!body) return;
-            if (!this.tasks.size) return body.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-muted); font-size:13px;">Waiting for tasks...</div>`;
+            if (!this.tasks.size) return body.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-muted); font-size:13px;">${tr("dash.waiting")}</div>`;
 
             const sorted = [...this.tasks.entries()].sort((a, b) => {
                 const ta = a[1], tb = b[1];
@@ -874,22 +1083,22 @@
                     t.type?.includes('STREAM') ? ICONS.STREAM :
                     ICONS.BOLT;
 
-                let statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'COMPLETED' : t.status;
-                let progressLabel = t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress';
+                let statusText = statusLabel(t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'COMPLETED' : t.status);
+                let progressLabel = t.pending ? tr("dash.inQueue") : t.failed ? tr("dash.aborted") : tr("dash.progress");
                 const unit = t.type === 'ACHIEVEMENT' ? '' : 's';
 
                 let actionBtn = '';
 
                 if (t.claimable) {
-                    if (t.claimState === 'WAITING') actionBtn = `<button class="claim-btn" disabled>WAITING...</button>`;
-                    else if (t.claimState === 'FAILED') actionBtn = `<button class="claim-btn failed" disabled>ACTION REQUIRED</button>`;
-                    else actionBtn = `<button class="claim-btn" data-id="${esc(id)}">CLAIM REWARD</button>`;
+                    if (t.claimState === 'WAITING') actionBtn = `<button class="claim-btn" disabled>${tr("dash.waitingClaim")}</button>`;
+                    else if (t.claimState === 'FAILED') actionBtn = `<button class="claim-btn failed" disabled>${tr("dash.actionRequired")}</button>`;
+                    else actionBtn = `<button class="claim-btn" data-id="${esc(id)}">${tr("dash.claimReward")}</button>`;
                 } else if (t.actionRequired === 'ENROLL') {
-                    statusText = 'ACTION REQUIRED'; progressLabel = 'Accept quest in Discord';
-                    actionBtn = `<button class="goto-btn">GO TO QUESTS</button>`;
+                    statusText = tr("dash.actionRequired"); progressLabel = tr("dash.acceptQuest");
+                    actionBtn = `<button class="goto-btn">${tr("dash.goto")}</button>`;
                 } else if (t.type === 'ACHIEVEMENT' && t.status === 'RUNNING') {
-                    statusText = 'ACTION REQUIRED'; progressLabel = 'Please, complete manually';
-                    actionBtn = `<button class="goto-btn">GO TO QUESTS</button>`;
+                    statusText = tr("dash.actionRequired"); progressLabel = tr("dash.completeManually");
+                    actionBtn = `<button class="goto-btn">${tr("dash.goto")}</button>`;
                 }
 
                 const stateClass = t.done ? 'done' : t.failed ? 'failed' : t.pending ? 'pending' : 'running';
@@ -941,17 +1150,19 @@
                 // the same side of the payout.
                 const boosted = canUseMoreQuestOrbs();
 
-                const REWARD_META = { 1: { label: "IN-GAME", color: "#e67e22" }, 3: { label: "AVATAR DECORATION", color: "#a358f2" }, 4: { label: "ORBS", color: "#5865F2" } };
-                const REWARD_FALLBACK = { label: "OTHER", color: "#949ba4" };
+                const REWARD_META = { 1: { label: tr("picker.reward.1"), color: "#e67e22" }, 3: { label: tr("picker.reward.3"), color: "#a358f2" }, 4: { label: tr("picker.reward.4"), color: "#5865F2" } };
+                const REWARD_FALLBACK = { label: tr("picker.reward.other"), color: "#949ba4" };
 
+                const dropped = [];
                 quests.forEach(q => {
+                    const qName = q.config?.messages?.questName ?? q.id;
                     const cfg = selectTaskConfig(q.config);
-                    if (!cfg?.tasks) return;
+                    if (!cfg?.tasks) { dropped.push([qName, 'no task config']); return; }
 
                     const typeData = Tasks.detectType(cfg, q.config?.application?.id);
-                    if (!typeData) return;
+                    if (!typeData) { dropped.push([qName, 'unsupported task type']); return; }
                     // exclude desktop-only quests (play/stream) on any non-desktop clients
-                    if (!SYS.IS_DESKTOP && (typeData.type === 'GAME' || typeData.type === 'STREAM')) return;
+                    if (!SYS.IS_DESKTOP && (typeData.type === 'GAME' || typeData.type === 'STREAM')) { dropped.push([qName, 'desktop-only task']); return; }
 
                     const rw = q.config?.rewardsConfig?.rewards?.[0];
                     const orbs = orbReward(q.config);
@@ -961,7 +1172,7 @@
                     // every entry for the payout line; the filter was the one place still reading
                     // the first. It also has to agree with the plugin's Orb-only setting.
                     const rewardType = orbs ? 4 : (rw?.type ?? 0);
-                    const rewardText = rw?.messages?.name ?? "Unknown Reward";
+                    const rewardText = rw?.messages?.name ?? tr("picker.unknownReward");
 
                     const meta = REWARD_META[rewardType] ?? REWARD_FALLBACK;
 
@@ -975,7 +1186,7 @@
 
                     items.push({
                         id: q.id,
-                        name: q.config?.messages?.questName ?? "Unknown Quest",
+                        name: q.config?.messages?.questName ?? tr("picker.unknownQuest"),
                         type: displayType,
                         rewardType,
                         rewardText,
@@ -984,6 +1195,13 @@
                         color: meta.color
                     });
                 });
+
+                // Surface every quest the picker dropped, with its reason, so a missing card is
+                // never silent. Rare in practice (the list is already filtered), so not spammy.
+                dropped.forEach(([qName, reason]) => Logger.log(`[Picker] ${tr("log.excluded", qName, reason)}`, 'info'));
+                if (dropped.length) {
+                    Logger.log(`[Picker] ${tr("picker.showing", items.length, quests.length)}`, 'info');
+                }
 
                 if (!items.length) return closePicker({ selectedQuests: new Set(), autoEnroll: false, autoClaim: false, playSound: false });
 
@@ -1009,37 +1227,37 @@
                     <form id="orion-picker-form">
                         <div id="orion-options-panel" style="display:none;">
                             ${rewardTypes.size > 1 ? `
-                                <div class="picker-section-title">Filter By Reward</div>
+                                <div class="picker-section-title">${tr("picker.filter.reward")}</div>
                                 <div class="reward-filters">
                                     ${[...rewardTypes.values()].map(rt => `<button type="button" class="reward-filter" data-rt="${rt.type}" style="color: ${rt.color}; border-color: ${rt.color};">${rt.label} (${rt.count})</button>`).join('')}
                                 </div>
                             ` : ''}
                             ${questTypes.size > 1 ? `
-                                <div class="picker-section-title">Filter By Type</div>
+                                <div class="picker-section-title">${tr("picker.filter.type")}</div>
                                 <div class="reward-filters">
                                     ${[...questTypes].map(t => `<button type="button" class="type-filter" data-qt="${t}">${t}</button>`).join('')}
                                 </div>
                             ` : ''}
-                            <div class="picker-section-title">Options</div>
+                            <div class="picker-section-title">${tr("picker.options")}</div>
                             <div class="picker-options">
-                                ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
-                                ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
-                                ${buildToggle('playSound', 'Sound on completion', RUNTIME.playSound)}
-                                ${buildToggle('randomDelay', 'Random 1-30min delay between cycles', RUNTIME.randomDelay)}
+                                ${buildToggle('autoEnroll', tr("picker.opt.autoEnroll"), RUNTIME.autoEnroll)}
+                                ${buildToggle('autoClaim', tr("picker.opt.autoClaim"), RUNTIME.autoClaim)}
+                                ${buildToggle('playSound', tr("picker.opt.playSound"), RUNTIME.playSound)}
+                                ${buildToggle('randomDelay', tr("picker.opt.randomDelay"), RUNTIME.randomDelay)}
                             </div>
                         </div>
 
                         <div id="orion-quest-list" class="picker-quest-list">${items.map(buildCard).join('')}
                             <div id="orion-no-quests" style="display: none; margin: auto; text-align: center; color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
-                                No quests available
+                                ${tr("picker.noQuests")}
                             </div>
                         </div>
 
                         <div id="orion-orb-total" class="orb-total"></div>
 
                         <div class="picker-actions">
-                            <button type="button" class="quest-pick-btn deselect" id="select-all-btn">DESELECT ALL</button>
-                            <button type="submit" class="quest-pick-btn start" id="start-btn">${ICONS.BOLT} <span id="start-btn-text">START (${items.length})</span></button>
+                            <button type="button" class="quest-pick-btn deselect" id="select-all-btn">${tr("picker.deselectAll")}</button>
+                            <button type="submit" class="quest-pick-btn start" id="start-btn">${ICONS.BOLT} <span id="start-btn-text">${tr("picker.start")} (${items.length})</span></button>
                         </div>
                     </form>`;
 
@@ -1063,22 +1281,22 @@
                     if (orbTotal) {
                         const picked = visibleCbs.filter(cb => cb.checked).map(cb => cb.closest('.quest-pick'));
                         const orbs = picked.reduce((total, el) => total + (Number(el?.getAttribute('data-orbs')) || 0), 0);
-                        const selectedText = orbs > 0 ? `${orbs} Orbs selected` : '';
+                        const selectedText = orbs > 0 ? tr("picker.orbTotal", orbs) : '';
                         const text = [selectedText, balanceText].filter(Boolean).join(' · ');
                         orbTotal.textContent = text;
                         orbTotal.style.display = text ? 'block' : 'none';
                     }
 
                     const startBtnText = document.getElementById('start-btn-text');
-                    if (startBtnText) startBtnText.textContent = `START (${totalChecked})`;
+                    if (startBtnText) startBtnText.textContent = `${tr("picker.start")} (${totalChecked})`;
                     startBtn.disabled = totalChecked === 0;
 
                     if (visibleCbs.length === 0) {
                         selectAllBtn.disabled = true;
-                        selectAllBtn.textContent = 'SELECT ALL';
+                        selectAllBtn.textContent = tr("picker.selectAll");
                     } else {
                         selectAllBtn.disabled = false;
-                        selectAllBtn.textContent = visibleCbs.every(cb => cb.checked) ? 'DESELECT ALL' : 'SELECT ALL';
+                        selectAllBtn.textContent = visibleCbs.every(cb => cb.checked) ? tr("picker.deselectAll") : tr("picker.selectAll");
                     }
 
                     const noQuestsMsg = document.getElementById('orion-no-quests');
@@ -1156,7 +1374,7 @@
                             Logger.log('[System] Discord sent no Orb balance, so the picker shows none.', 'warn');
                             return;
                         }
-                        balanceText = `${balance} Orbs on the account`;
+                        balanceText = tr("picker.balance", balance);
                         syncUI();
                     })
                     .catch(e => Logger.log(`[System] Could not read the Orb balance: ${e?.message ?? e}`, 'warn'));
@@ -1757,7 +1975,7 @@
                 // (~30s later) corrected it.
                 const seeded = Tasks.readProgress(s, key);
                 Logger.updateTask(q.id, { name: t.name, type, cur: seeded, max: t.target, status: "RUNNING" });
-                Logger.log(`[Task] Started ${type}: ${gameData.name}`, 'info');
+                Logger.log(`[Task] ${tr("log.taskStarted", type, gameData.name)}`, 'info');
 
                 // Stopping the watching and releasing the fake process used to be one step. They
                 // are separate because a finished quest holds the process a little longer than it
@@ -2341,7 +2559,7 @@
             Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED" });
             // The one place the run knows a quest finished because of its own work.
             recordOutcome(Tasks.outcomes, q.id, 'completed');
-            Logger.log(`[Task] Completed "${t.name}"!`, 'success');
+            Logger.log(`[Task] ${tr("log.taskCompleted", t.name)}`, 'success');
             Sound.play('tick');
 
             try {
@@ -2665,19 +2883,22 @@
 
     async function main() {
         Logger.init();
-        if (!loadModules()) return Logger.log('[System] Failed to load Discord modules. Aborting.', 'err');
+        if (!loadModules()) return Logger.log(`[System] ${tr("log.modulesFail")}`, 'err');
 
         // show quest picker and wait for user selection
         const getQuests = () => {
-            const q = Mods.QuestStore.quests;
-            return q instanceof Map ? [...q.values()] : Object.values(q);
+            const q = Mods.QuestStore?.quests;
+            if (q == null) return [];                       // property not on the store yet
+            if (q instanceof Map) return [...q.values()];
+            if (Array.isArray(q)) return q;
+            return Object.values(q);
         };
 
         // Discord fetches its quest list a few seconds after the client boots, so a paste into a
         // console that was opened immediately can land on an empty store. Wait for it rather than
         // reporting "all completed" for a list that has not arrived yet (issue #74).
         if (!getQuests().length) {
-            Logger.log('[System] Waiting for Discord to send its quest list...', 'info');
+            Logger.log(`[System] ${tr("log.waitingQuests")}`, 'info');
             for (let waited = 0; waited < 15000 && !getQuests().length && RUNTIME.running; waited += 250) {
                 await new Promise(r => setTimeout(r, 250));
             }
@@ -2685,25 +2906,51 @@
         if (!RUNTIME.running) return;
 
         const allQuests = getQuests();
-        let quests = allQuests.filter(q =>
-            !q.userStatus?.completedAt
-            && notExpired(q)
-            && q.id !== CONST.ID
-            && !Tasks.skipped.has(q.id)
-        );
+
+        // Classify every dropped quest so "why is this quest missing?" answers itself in the log
+        // instead of reading as a silently hidden card. Counted and summarized, not per-quest spam.
+        const excluded = { completed: 0, expired: 0, blacklisted: 0, skipped: 0 };
+        let quests = allQuests.filter(q => {
+            if (q.userStatus?.completedAt) { excluded.completed++; return false; }
+            if (!notExpired(q)) { excluded.expired++; return false; }
+            if (q.id === CONST.ID) { excluded.blacklisted++; return false; }
+            if (Tasks.skipped.has(q.id)) { excluded.skipped++; return false; }
+            return true;
+        });
+
+        if (allQuests.length - quests.length > 0) {
+            const parts = [];
+            if (excluded.completed) parts.push(`${excluded.completed} completed`);
+            if (excluded.expired) parts.push(`${excluded.expired} expired`);
+            if (excluded.blacklisted) parts.push(`${excluded.blacklisted} blacklisted`);
+            if (excluded.skipped) parts.push(`${excluded.skipped} skipped`);
+            Logger.log(`[System] ${tr("log.excludedCount", allQuests.length - quests.length)} (${parts.join(', ')})`, 'info');
+        }
 
         if (!quests.length) {
-            // An empty store and a store full of finished quests read identically to the user
-            // otherwise, and only one of them means "come back later".
+            // An empty store and a store full of finished/expired quests must not read the same:
+            // only the first means "come back later".
             if (!allQuests.length) {
-                Logger.log('[System] Discord has not given this client a quest list. Reload Discord (Ctrl+R) and paste again.', 'err');
+                Logger.log(`[System] ${tr("log.noQuestsList")}`, 'err');
             } else {
-                Logger.log('[System] All available quests are completed!', 'success');
+                Logger.log(`[System] ${tr("log.noActiveQuests")}`, 'warn');
             }
             return Logger.shutdown();
         }
 
-        const pickerResult = await Logger.showQuestPicker(quests);
+        // AUTO_START skips the picker and runs every eligible quest with the current defaults.
+        let pickerResult;
+        if (CONFIG.AUTO_START) {
+            pickerResult = {
+                selectedQuests: new Set(quests.map(q => q.id)),
+                autoEnroll: RUNTIME.autoEnroll,
+                autoClaim: RUNTIME.autoClaim,
+                playSound: RUNTIME.playSound,
+                randomDelay: RUNTIME.randomDelay
+            };
+        } else {
+            pickerResult = await Logger.showQuestPicker(quests);
+        }
         if (!RUNTIME.running) return;
 
         // Propagate UI options to global runtime state
@@ -2713,7 +2960,7 @@
         RUNTIME.randomDelay = pickerResult.randomDelay;
 
         if (pickerResult.selectedQuests.size === 0) {
-            Logger.log('[System] No quests selected. Shutting down.', 'info');
+            Logger.log(`[System] ${tr("log.noSelected")}`, 'info');
             return Logger.shutdown();
         }
 
@@ -2721,7 +2968,7 @@
 
         while (RUNTIME.running) {
             try {
-                Logger.log(`[Cycle] Starting loop #${loopCount}...`, 'info');
+                Logger.log(`[Cycle] ${tr("log.cycleStart", loopCount)}`, 'info');
 
                 // Discord tells the client when the account may not enroll in anything, and
                 // the quest list carries the timestamp. Checked every cycle rather than once
@@ -2730,13 +2977,13 @@
                 const suspendedUntil = questAccessSuspendedUntil();
                 if (suspendedUntil) {
                     const when = suspendedUntil.getTime() === 0 ? 'for now' : `until ${suspendedUntil.toLocaleString()}`;
-                    Logger.log(`[System] Discord has suspended quest access on this account ${when}. Its own client refuses to start a quest in this state, so Orion stops too.`, 'err');
+                    Logger.log(`[System] ${tr("log.suspended", when)}`, 'err');
                     break;
                 }
 
                 const blockedUntil = enrollmentBlockedUntil();
                 if (blockedUntil) {
-                    Logger.log(`[System] Discord has blocked quest enrollment on this account until ${blockedUntil.toLocaleString()}. Stopping instead of retrying.`, 'err');
+                    Logger.log(`[System] ${tr("log.blocked", blockedUntil.toLocaleString())}`, 'err');
                     break;
                 }
 
@@ -2795,7 +3042,7 @@
                         const tInfo = {
                             id: q.id,
                             appId: appId ?? 0,
-                            name: q.config?.messages?.questName ?? "Unknown Quest",
+                            name: q.config?.messages?.questName ?? tr("picker.unknownQuest"),
                             target,
                             type,
                             keyName  // actual task key from config (e.g. WATCH_VIDEO_ON_MOBILE)
@@ -2821,7 +3068,7 @@
                         const taskFunc = async () => {
                             // JIT enrollment (only if autoEnroll is true or user already enrolled)
                             if (!q.userStatus?.enrolledAt) {
-                                Logger.log(`[Enroll] Accepting quest: ${tInfo.name}`, 'info');
+                                Logger.log(`[Enroll] ${tr("log.enroll", tInfo.name)}`, 'info');
                                 try {
                                     await Traffic.enqueue(`/quests/${q.id}/enroll`, {
                                         location: 11,
@@ -2859,7 +3106,7 @@
                 const totalTasks = queues.video.length + queues.game.length;
 
                 if (totalTasks > 0) {
-                    Logger.log(`[Cycle] Processing: ${queues.video.length} videos, ${queues.game.length} games.`, 'info');
+                    Logger.log(`[Cycle] ${tr("log.cycleProcess", queues.video.length, queues.game.length)}`, 'info');
                     const sharedGames = new Map();
                     for (const s of scheduledInfo) {
                         if (s.type !== "GAME") continue;
@@ -2872,11 +3119,11 @@
                         if (count < 2) continue;
                         Logger.log(`[Cycle] ${count} "${name}" quests are the same game, so Discord credits all ${count} while it runs once and they finish together. The limit still drives one at a time.`, 'info');
                     }
-                    const pGames = runConcurrent(queues.game, 1);
-                    const pVideos = runConcurrent(queues.video, 2);
+                    const pGames = runConcurrent(queues.game, Math.max(1, CONFIG.GAME_CONCURRENCY | 0));
+                    const pVideos = runConcurrent(queues.video, Math.max(1, CONFIG.VIDEO_CONCURRENCY | 0));
                     await Promise.all([pGames, pVideos]);
                 } else {
-                    if (active.length === 0) { Logger.log('[System] All available quests are completed!', 'success'); break; }
+                    if (active.length === 0) { Logger.log(`[System] ${tr("log.allCompleted")}`, 'success'); break; }
                     else await sleep(rnd(4000, 6000));  // idle loop wait
                 }
 

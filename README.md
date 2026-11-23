@@ -1,6 +1,6 @@
 # Orion
 
-[![Version](https://img.shields.io/badge/v4.11.5-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer/releases/latest)
+[![Version](https://img.shields.io/badge/v4.11.6-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer/releases/latest)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -9,6 +9,20 @@ Completes Discord Quests without playing them. It reads the quests you're eligib
 It handles all five quest types: play a game, stream a game, watch a video, join an activity, and earn an achievement inside an activity. That last one is the reason this project exists, and none of the other tools listed at the bottom of this page do it.
 
 Two ways to run it. A single userscript you paste into DevTools, or a Vencord plugin that starts with Discord. Same engine, kept in sync, in this repo.
+
+> **This fork** adds a Linux one-command launcher, a RU/EN language switch, and extra settings (auto-start, per-type concurrency, sound volume). See [Linux launcher](#linux-launcher) and [Settings](#settings) below.
+
+## Linux launcher
+
+On Linux (Arch and other distros) you can start everything with one command instead of pasting by hand:
+
+```sh
+./tools/launcher/run.sh
+```
+
+It launches Discord Canary with remote debugging, starts the achievement relay, and injects the userscript automatically over the Chrome DevTools Protocol (the same as pasting it into the console). `./tools/launcher/run.sh --manual` starts Canary + relay and prints paste instructions instead. Requirements: Discord Canary, Node ≥ 22, and python3 for achievement quests.
+
+The userscript has new `CONFIG` options (top of `index.js`): `LANG` (`"auto"` | `"en"` | `"ru"` — the dashboard follows Discord's locale by default), `AUTO_START` (skip the picker and run every eligible quest on paste), `GAME_CONCURRENCY` / `VIDEO_CONCURRENCY` (parallel task limits), and `SOUND_VOLUME` (0..1). There is also a **RU/EN button in the dashboard header** that switches the language live.
 
 > [!CAUTION]
 > **Discord has been enforcing against quest automation since April 2026.** People have had system messages land on their account after running automation, any automation, not only this. That is the trade you are making.
